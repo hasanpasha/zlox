@@ -1,6 +1,5 @@
-var buffer: [1024]u8 = undefined;
-const stdout_file = std.fs.File.stdout();
-var stdout_writer = stdout_file.writer(&buffer);
+var stdout_buffer: [1024]u8 = undefined;
+var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
 const stdout = &stdout_writer.interface;
 
 var stderr_buffer: [1024]u8 = undefined;
@@ -19,7 +18,7 @@ pub fn main() !void {
     if (args.len == 1) {
         try repl(allocator);
     } else if (args.len == 2) {
-        try runFile(args[1]);
+        try runFile(args[1], allocator);
     } else {
         std.log.err("usage: zlox [path]", .{});
         std.process.exit(64);
@@ -27,9 +26,8 @@ pub fn main() !void {
 }
 
 fn repl(allocator: std.mem.Allocator) !void {
-    var read_buf: [1024]u8 = undefined;
-    const stdin_file = std.fs.File.stdin();
-    var stdin_reader = stdin_file.reader(&read_buf);
+    var stdin_buffer: [1024]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
     const stdin = &stdin_reader.interface;
 
     const vm = try VM.init(allocator, stdout, stderr);
@@ -56,8 +54,20 @@ fn repl(allocator: std.mem.Allocator) !void {
     }
 }
 
-fn runFile(path: [:0]u8) !void {
-    _ = path;
+fn runFile(path: [:0]u8, allocator: std.mem.Allocator) !void {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const code = try file.readToEndAlloc(allocator, 65000);
+    defer allocator.free(code);
+
+    const vm = try VM.init(allocator, stdout, stderr);
+    defer vm.deinit();
+
+    const chunk = try Compiler.compile(code, allocator, &vm.garbage_collector, stderr);
+    defer chunk.deinit();
+
+    try vm.interpret(chunk);
 }
 
 const std = @import("std");

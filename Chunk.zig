@@ -4,7 +4,9 @@ locations: std.ArrayList(Location),
 
 allocator: std.mem.Allocator,
 
-pub fn init(allocator: std.mem.Allocator) !*Chunk {
+pub const Error = AllocError || error{overflow};
+
+pub fn init(allocator: std.mem.Allocator) AllocError!*Chunk {
     const self = try allocator.create(Chunk);
     self.allocator = allocator;
     self.code = try .initCapacity(self.allocator, 8);
@@ -21,23 +23,23 @@ pub fn deinit(self: *Chunk) void {
     self.allocator.destroy(self);
 }
 
-pub fn write_op(self: *Chunk, op_code: OpCode, loc: Location) !void {
+pub fn write_op(self: *Chunk, op_code: OpCode, loc: Location) AllocError!void {
     try self.locations.append(self.allocator, loc);
     try self.code.append(self.allocator, @intFromEnum(op_code));
 }
 
-pub fn write(self: *Chunk, byte: u8, loc: Location) !void {
+pub fn write(self: *Chunk, byte: u8, loc: Location) AllocError!void {
     try self.locations.append(self.allocator, loc);
     try self.code.append(self.allocator, byte);
 }
 
-pub fn write_constant(self: *Chunk, value: Value, loc: Location) !void {
+pub fn write_constant(self: *Chunk, value: Value, loc: Location) Error!void {
     const constant = try self.add_constant(value);
     try self.write_op(.constant, loc);
     try self.write(constant, loc);
 }
 
-pub fn add_constant(self: *Chunk, value: Value) !u8 {
+pub fn add_constant(self: *Chunk, value: Value) Error!u8 {
     if (self.constants.items.len + 1 >= 0xFF)
         return error.overflow;
 
@@ -46,6 +48,7 @@ pub fn add_constant(self: *Chunk, value: Value) !u8 {
 }
 
 const std = @import("std");
+const AllocError = std.mem.Allocator.Error;
 const Chunk = @This();
 const Value = @import("value.zig").Value;
 const Location = @import("Location.zig");

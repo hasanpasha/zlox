@@ -3,6 +3,10 @@ pub const OpCode = enum(u8) {
     nil,
     true,
     false,
+    pop,
+    get_global,
+    define_global,
+    set_global,
     equal,
     greater,
     less,
@@ -12,6 +16,7 @@ pub const OpCode = enum(u8) {
     multiply,
     divide,
     not,
+    print,
     @"return",
     _,
 

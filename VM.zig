@@ -1,5 +1,6 @@
 iter: ChunkIter,
 stack: std.ArrayList(Value),
+globals: std.AutoHashMap(*StringObject, Value),
 allocator: std.mem.Allocator,
 garbage_collector: GarbageCollector,
 writer: *std.Io.Writer,
@@ -8,6 +9,7 @@ error_writer: *std.Io.Writer,
 pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer, error_writer: *std.Io.Writer) !*VM {
     const self = try allocator.create(VM);
     self.stack = try .initCapacity(allocator, 8);
+    self.globals = .init(allocator);
     self.allocator = allocator;
     self.garbage_collector = .init(allocator);
     self.writer = writer;
@@ -17,6 +19,7 @@ pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer, error_writer: 
 
 pub fn deinit(self: *VM) void {
     self.stack.deinit(self.allocator);
+    self.globals.deinit();
     self.garbage_collector.deinit();
     self.allocator.destroy(self);
 }
@@ -57,6 +60,25 @@ fn run(self: *VM) !void {
             .nil => try self.push(.nil),
             .true => try self.push(.{ .bool = true }),
             .false => try self.push(.{ .bool = false }),
+            .pop => _ = try self.pop(),
+            .get_global => |name| {
+                if (self.globals.get(name)) |value| {
+                    try self.push(value);
+                } else {
+                    try self.runtimeError("undefined variable '{s}'.", .{name.data});
+                }
+            },
+            .define_global => |name| {
+                const value = try self.pop();
+                try self.globals.put(name, value);
+            },
+            .set_global => |name| {
+                if (self.globals.contains(name)) {
+                    try self.globals.put(name, self.peek(0));
+                } else {
+                    try self.runtimeError("undefined variable '{s}'", .{name.data});
+                }
+            },
             .equal => {
                 const b = try self.pop();
                 const a = try self.pop();
@@ -71,11 +93,11 @@ fn run(self: *VM) !void {
             },
             .greater, .less, .add, .subtract, .multiply, .divide => try self.binary_op(std.meta.activeTag(op.op)),
             .not => try self.push(.{ .bool = is_falsy(try self.pop()) }),
-            .@"return" => {
+            .print => {
                 const val = try self.pop();
                 try self.writer.print("{f}\n", .{val});
-                return;
             },
+            .@"return" => return,
         }
     }
 }
@@ -193,6 +215,19 @@ pub const ChunkIter = struct {
 
                 break :op self.advance_with(2, .{ .constant = val });
             },
+            .get_global, .define_global, .set_global => op: {
+                const constant = self.chunk.code.items[self.index + 1];
+                const name = StringObject.case(self.chunk.constants.items[constant].object);
+
+                const this_op: Op = switch (opcode) {
+                    .get_global => .{ .get_global = name },
+                    .define_global => .{ .define_global = name },
+                    .set_global => .{ .set_global = name },
+                    else => unreachable,
+                };
+
+                break :op self.advance_with(2, this_op);
+            },
             inline else => |tag| self.advance_with(1, @unionInit(Op, @tagName(tag), {})),
             _ => {
                 self.index += 1;
@@ -220,6 +255,10 @@ pub const Op = union(OpCode) {
     nil,
     true,
     false,
+    pop,
+    get_global: *StringObject,
+    define_global: *StringObject,
+    set_global: *StringObject,
     equal,
     greater,
     less,
@@ -229,11 +268,16 @@ pub const Op = union(OpCode) {
     multiply,
     divide,
     not,
+    print,
     @"return",
 
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
             .constant => |val| try writer.print("constant {f}\t", .{val}),
+            .get_global, .define_global, .set_global => |name| try writer.print("{f} \"{s}\"\t", .{
+                std.meta.activeTag(self),
+                name.data,
+            }),
             inline else => |_, tag| try writer.print("{f}\t", .{tag}),
         }
     }
