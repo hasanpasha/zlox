@@ -4,45 +4,25 @@ pub const Tree = struct {
     tag: Tag,
     children: std.ArrayList(Child),
 
-    pub const Tag = union(enum) {
-        expr: Expr,
-        stmt: Stmt,
-        decl: Decl,
-        err: Err,
+    pub const Tag = enum {
+        literal_expr,
+        var_expr,
+        unary_expr,
+        binary_expr,
+        assign_expr,
+        group_expr,
+
+        expr_stmt,
+        print_stmt,
+        block_stmt,
+        var_decl,
+
         program,
 
-        pub const Expr = enum {
-            literal,
-            @"var",
-            unary,
-            binary,
-            assign,
-            group,
-        };
+        repl_item,
+        repl_cmd,
 
-        pub const Stmt = enum {
-            print,
-            block,
-            expr,
-        };
-
-        pub const Decl = enum {
-            @"var",
-            stmt,
-        };
-
-        pub const Err = enum {
-            unexpected,
-            missing,
-            skipped,
-        };
-
-        pub fn format(self: Tag, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-            switch (self) {
-                .program => try writer.print("{t}", .{self}),
-                inline else => |inner_tag, tag| try writer.print("{t}_{t}", .{ inner_tag, tag }),
-            }
-        }
+        err,
     };
 
     pub const ChildKind = enum {
@@ -155,8 +135,8 @@ pub const Tree = struct {
 
     pub fn format(self: Tree, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         var buffer: [1024]bool = undefined;
-        var pretty: Pretty = .{ .is_last = .initBuffer(&buffer) };
-        try pretty.print_tree(self, writer);
+        var pretty: TreePrettyPrinter = .{ .are_last = .initBuffer(&buffer), .writer = writer };
+        try pretty.pp_tree(self);
     }
 
     pub fn iter(self: Tree, ignores: []const Iter.Ignore) Iter {
@@ -164,59 +144,47 @@ pub const Tree = struct {
     }
 };
 
-pub const Pretty = struct {
-    is_last: std.ArrayList(bool),
+pub const TreePrettyPrinter = struct {
+    are_last: std.ArrayList(bool),
+    writer: *Writer,
 
-    fn print_tree(
-        self: *Pretty,
-        tree: Tree,
-        writer: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        try writer.print("{f}\n", .{tree.tag});
+    const Writer = std.Io.Writer;
+
+    fn pp_tree(self: *TreePrettyPrinter, tree: Tree) Writer.Error!void {
+        try self.writer.print("{t}\n", .{tree.tag});
 
         var children = tree.iter(&.{.token_tag_check(Token.Tag.is_trivia)});
 
+        const is_last = self.are_last.addOneAssumeCapacity();
+        defer _ = self.are_last.pop();
+
         while (children.next()) |child| {
-            try self.print_child(
-                child,
-                children.peek() == null,
-                writer,
-            );
+            is_last.* = children.peek() == null;
+
+            try self.pp_child(child);
         }
     }
 
-    fn print_child(
-        self: *Pretty,
-        child: Tree.Child,
-        is_last: bool,
-        writer: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        for (self.is_last.items) |parent_is_last| {
-            try writer.writeAll(
-                if (parent_is_last) "    " else "│   ",
-            );
-        }
+    fn pp_child(self: *TreePrettyPrinter, child: Tree.Child) Writer.Error!void {
+        for (1.., self.are_last.items) |i, parent_is_last| {
+            const prefix = if (i == self.are_last.items.len)
+                if (parent_is_last) "└── " else "├── "
+            else if (parent_is_last) "    " else "│   ";
 
-        try writer.writeAll(if (is_last) "└── " else "├── ");
+            try self.writer.writeAll(prefix);
+        }
 
         switch (child) {
             .token => |token| {
-                try writer.print("{t} ", .{token.tag});
+                try self.writer.print("{t} ", .{token.tag});
 
-                switch (token.tag) {
-                    .number, .string, .identifier => try writer.print("'{s}'", .{token.lexeme()}),
-                    else => {},
-                }
+                if (token.tag.is_one_of(&.{ .number, .string, .identifier }))
+                    try self.writer.print("'{s}'", .{token.lexeme()});
 
-                try writer.writeByte('\n');
+                try self.writer.writeByte('\n');
             },
 
-            .tree => |child_tree| {
-                self.is_last.appendAssumeCapacity(is_last);
-                defer _ = self.is_last.pop();
-
-                try self.print_tree(child_tree, writer);
-            },
+            .tree => |child_tree| try self.pp_tree(child_tree),
         }
     }
 };

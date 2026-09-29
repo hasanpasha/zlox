@@ -39,16 +39,13 @@ pub fn deinit(self: *ZLOX) void {
     self.gpa.destroy(self);
 }
 
-pub const Mode = enum {
-    expr,
-    program,
-};
-
 pub fn repl(self: *ZLOX) Error!void {
     const stdin_source: Source = try .new("stdin");
 
+    const PS = ">>> ";
+
     while (true) {
-        try self.stdout.interface.writeAll(">>> ");
+        try self.stdout.interface.writeAll(PS);
         try self.stdout.interface.flush();
 
         const line = self.stdin.interface.takeDelimiter('\n') catch |err| {
@@ -58,46 +55,72 @@ pub fn repl(self: *ZLOX) Error!void {
 
         try stdin_source.updateSourceCodeFromSlice(line);
 
-        const node: HeapValue(Node) = self.parse(.expr, stdin_source) catch |err| blk: {
-            if (err != error.parse_failed) return @errorCast(err);
-            break :blk self.parse(.program, stdin_source) catch |prg_err| {
-                if (prg_err != error.parse_failed) return @errorCast(err);
+        var tokens = try Lexer.lex(stdin_source, self.gpa);
+        defer tokens.deinit(self.gpa);
 
-                try self.stdout.interface.flush();
-                try self.stderr.interface.flush();
-                continue;
-            };
-        };
-        defer node.free();
+        var cst = try Parser.parse_repl_item(tokens, self.gpa);
+        defer cst.free();
 
-        self.interpreter.interpret(node.value) catch |err| {
-            if (@TypeOf(err) == Error) return err;
-
-            try self.stderr.interface.print("runtime error: {t}\n", .{err});
-
-            try self.stdout.interface.flush();
+        var ast = ASTLower.lower_repl_item(cst.value, self.gpa) catch |err| {
+            if (@TypeOf(err) == Error) return @errorCast(err);
+            try self.stderr.interface.print("parser error: {t}\n", .{err});
             try self.stderr.interface.flush();
             continue;
-        };
+        } orelse continue;
+        defer ast.free();
+
+        switch (ast.value) {
+            .expr => |expr| {
+                const value = self.interpreter.eval_expr(expr) catch |err| {
+                    if (@TypeOf(err) == Error) return @errorCast(err);
+                    try self.stderr.interface.print("runtime error: {t}\n", .{err});
+                    try self.stderr.interface.flush();
+                    continue;
+                };
+                try self.stdout.interface.print("{f}\n", .{value});
+            },
+            .stmt => |stmt| self.interpreter.execute_stmt(stmt) catch |err| {
+                if (@TypeOf(err) == Error) return @errorCast(err);
+                try self.stderr.interface.print("runtime error: {t}\n", .{err});
+                try self.stderr.interface.flush();
+                continue;
+            },
+            .cmd => |cmd| switch (cmd) {
+                .quit => break,
+            },
+        }
 
         try self.stdout.interface.flush();
         try self.stderr.interface.flush();
     }
 }
 
-fn parse(self: *ZLOX, mode: Mode, source: Source) (error{parse_failed} || Error)!HeapValue(Node) {
+pub fn run_file(self: *ZLOX, filepath: []const u8) Error!void {
+    const source: Source = try .new(filepath);
+    try source.updateSourceCodeFromFile();
+
     var tokens = try Lexer.lex(source, self.gpa);
     defer tokens.deinit(self.gpa);
 
-    const cst = try Parser.parse(mode, tokens, self.gpa);
+    var cst = try Parser.parse_program(tokens, self.gpa);
     defer cst.free();
 
-    return ASTLower.lower(mode, cst.value, self.gpa) catch |err| {
-        if (@TypeOf(err) == Error) return err;
-
+    var ast = ASTLower.lower_program(cst.value, self.gpa) catch |err| {
+        if (@TypeOf(err) == Error) return @errorCast(err);
         try self.stderr.interface.print("parser error: {t}\n", .{err});
-        return error.parse_failed;
-    } orelse error.parse_failed;
+        try self.stderr.interface.flush();
+        return;
+    };
+    defer ast.free();
+
+    self.interpreter.run_program(ast.value) catch |err| {
+        if (@TypeOf(err) == Error) return @errorCast(err);
+        try self.stderr.interface.print("runtime error: {t}\n", .{err});
+        try self.stderr.interface.flush();
+    };
+
+    try self.stdout.interface.flush();
+    try self.stderr.interface.flush();
 }
 
 const ZLOX = @This();
@@ -113,7 +136,6 @@ const Lexer = @import("Lexer.zig");
 const Tree = @import("CST.zig").Tree;
 const Parser = @import("Parser.zig");
 const AST = @import("AST.zig");
-const Node = AST.Node;
 const ASTLower = @import("ASTLower.zig");
 const Interpreter = @import("Interpreter.zig");
 

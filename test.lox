@@ -1,0 +1,3 @@
+var i = 30;
+print i;
+print "hello world";

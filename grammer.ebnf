@@ -1,14 +1,14 @@
-program = decl* EOF;
+program = decl* EOF ;
 
 decl = 
-    | var_decl
+      var_decl
     | stmt
     ;
 
 var_decl = "var" IDENTIFIER ( "=" expr )? ";" ;
 
 stmt = 
-    | print_stmt
+      print_stmt
     | block_stmt
     | expr_stmt
     ;
@@ -21,10 +21,7 @@ expr_stmt = expr ";" ;
 
 expr = assignment_expr ;
 
-assignment_expr = 
-    | IDENTIFIER "=" assignment_expr
-    | equality_expr
-    ;
+assignment_expr = IDENTIFIER "=" assignment_expr | equality_expr ;
 
 equality_expr = comparison_expr ( ( "!=" | "==" ) comparison_expr )* ;
 
@@ -35,12 +32,12 @@ term_expr = factor_expr ( ( "+" | "-" ) factor_expr )* ;
 factor_expr = unary_expr ( ( "*" | "/" ) unary_expr )* ;
 
 unary_expr = 
-    | ( "!" | "-" ) unary_expr
+      ( "!" | "-" ) unary_expr
     | primary_expr
     ;
 
 primary_expr =
-    | NUMBER
+      NUMBER
     | STRING
     | IDENTIFIER
     | "true"
@@ -48,3 +45,9 @@ primary_expr =
     | "nil"
     | "(" expr ")"
     ;
+
+(* repl *)
+
+repl_item = ( decl | expr| repl_cmd ) EOF ;
+
+repl_cmd = ";" ( "quit" ) ; 

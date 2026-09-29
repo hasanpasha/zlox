@@ -1,5 +1,5 @@
 var sources: std.ArrayList(SourceInfo) = .empty;
-var io: std.Io = undefined;
+var io: Io = undefined;
 var gpa: Allocator = undefined;
 
 pub const Source = enum(usize) {
@@ -7,7 +7,7 @@ pub const Source = enum(usize) {
 
     pub const Error = error{
         cant_load_file,
-    } || Allocator.Error;
+    } || Allocator.Error || Io.Dir.ReadFileAllocError;
 
     pub fn new(name: []const u8) Error!Source {
         const source: Source = @enumFromInt(sources.items.len);
@@ -35,12 +35,12 @@ pub const Source = enum(usize) {
         const source_info = self.getSourceInfo();
         _ = source_info.arena.reset(.retain_capacity);
 
-        source_info.code = std.Io.Dir.cwd().readFileAlloc(
+        source_info.code = try std.Io.Dir.cwd().readFileAlloc(
             io,
             source_info.name,
             source_info.arena.allocator(),
             .unlimited,
-        ) catch return Error.cant_load_file;
+        );
         source_info.lines = try getLines(source_info.code, source_info.arena.allocator());
     }
 
@@ -107,7 +107,7 @@ pub const Location = struct {
     }
 };
 
-pub fn init(_io: std.Io, _gpa: Allocator) void {
+pub fn init(_io: Io, _gpa: Allocator) void {
     io = _io;
     gpa = _gpa;
 }
@@ -121,6 +121,7 @@ pub fn deinit() void {
 }
 
 const std = @import("std");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const Token = @import("Token.zig");

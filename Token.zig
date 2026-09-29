@@ -7,7 +7,7 @@ pub const Tag = enum {
     
     // single-character
     left_paren, right_paren, left_brace, right_brace,
-    comma, semicolon, dot, plus, minus, star, slash,
+    comma, colon, semicolon, dot, plus, minus, star, slash,
 
     // one or two character
     bang, bang_equal, equal, equal_equal,

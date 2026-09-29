@@ -105,7 +105,7 @@ fn literal_expr(self: *Interpreter, lit: Literal) Error!Literal {
 }
 
 fn unary_expr(self: *Interpreter, unary: Expr.Unary) Error!Literal {
-    const rhs = try self.expr(unary.rhs.*);
+    const rhs = try self.eval_expr(unary.rhs.*);
     return switch (unary.op) {
         .neg => switch (rhs) {
             .number => |value| .{ .number = -value },
@@ -116,8 +116,8 @@ fn unary_expr(self: *Interpreter, unary: Expr.Unary) Error!Literal {
 }
 
 fn binary_expr(self: *Interpreter, binary: Expr.Binary) Error!Literal {
-    const lhs = try self.expr(binary.lhs.*);
-    const rhs = try self.expr(binary.rhs.*);
+    const lhs = try self.eval_expr(binary.lhs.*);
+    const rhs = try self.eval_expr(binary.rhs.*);
 
     return switch (binary.op) {
         .add => switch (lhs) {
@@ -172,14 +172,14 @@ fn var_expr(self: *Interpreter, name: []const u8) Error!Literal {
 }
 
 fn assign_expr(self: *Interpreter, assign: Expr.Assign) Error!Literal {
-    const value = try self.expr(assign.value.*);
+    const value = try self.eval_expr(assign.value.*);
 
     try self.environment.assign(try self.intern(assign.name), value);
 
     return value;
 }
 
-pub fn expr(self: *Interpreter, exp: Expr) Error!Literal {
+pub fn eval_expr(self: *Interpreter, exp: Expr) Error!Literal {
     return switch (exp) {
         .literal => |literal| self.literal_expr(literal),
         .@"var" => |name| self.var_expr(name),
@@ -189,22 +189,22 @@ pub fn expr(self: *Interpreter, exp: Expr) Error!Literal {
     };
 }
 
-fn execute_block(self: *Interpreter, _block: std.ArrayList(Decl), new_env: *Environment) Error!void {
+fn execute_block(self: *Interpreter, _block: std.ArrayList(Stmt), new_env: *Environment) Error!void {
     const prev_env = self.environment;
     defer self.environment = prev_env;
     errdefer self.environment = prev_env;
 
     self.environment = new_env;
-    for (_block.items) |inner_decl| {
-        try self.decl(inner_decl);
+    for (_block.items) |inner_stmt| {
+        try self.execute_stmt(inner_stmt);
     }
 }
 
-pub fn stmt(self: *Interpreter, _stmt: Stmt) Error!void {
+pub fn execute_stmt(self: *Interpreter, _stmt: Stmt) Error!void {
     switch (_stmt) {
-        .expr => |exp| _ = try self.expr(exp),
+        .expr => |exp| _ = try self.eval_expr(exp),
         .print => |exp| {
-            const value = try self.expr(exp);
+            const value = try self.eval_expr(exp);
             try self.stdout.print("{f}\n", .{value});
         },
         .block => |_block| {
@@ -212,32 +212,16 @@ pub fn stmt(self: *Interpreter, _stmt: Stmt) Error!void {
             defer env.deinit();
             try self.execute_block(_block, env);
         },
-    }
-}
-
-pub fn decl(self: *Interpreter, _decl: Decl) Error!void {
-    switch (_decl) {
-        .@"var" => |_var| {
-            const value: Literal = if (_var.initializer) |_init| try self.expr(_init) else .nil;
+        .var_decl => |_var| {
+            const value: Literal = if (_var.initializer) |_init| try self.eval_expr(_init) else .nil;
             try self.environment.define(try self.intern(_var.name), value);
         },
-        .stmt => |_stmt| try self.stmt(_stmt),
     }
 }
 
-pub fn program(self: *Interpreter, _program: Program) Error!void {
-    for (_program.decls.items) |_decl| {
-        try self.decl(_decl);
-    }
-}
-
-pub fn interpret(self: *Interpreter, node: Node) Error!void {
-    switch (node) {
-        .expr => |_expr| {
-            const lit = try self.expr(_expr);
-            try self.stdout.print("{f}\n", .{lit});
-        },
-        .program => |prg| try self.program(prg),
+pub fn run_program(self: *Interpreter, _program: Program) Error!void {
+    for (_program.stmts.items) |_stmt| {
+        try self.execute_stmt(_stmt);
     }
 }
 
@@ -248,12 +232,9 @@ const activeTag = std.meta.activeTag;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-const Mode = @import("Parser.zig").Mode;
-
 const AST = @import("AST.zig");
-const Node = AST.Node;
+const ReplItem = AST.ReplItem;
 const Program = AST.Program;
-const Decl = AST.Decl;
 const Stmt = AST.Stmt;
 const Expr = AST.Expr;
 const Literal = Expr.Literal;

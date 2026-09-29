@@ -37,7 +37,7 @@ fn close(self: *Parser, mark: MarkOpened, kind: CST.Tree.Tag) Error!MarkClosed {
 }
 
 fn advance(self: *Parser) Error!void {
-    if (self.eof()) @panic("EOF");
+    // if (self.eof()) @panic("EOF");
     self.fuel = 256;
 
     for (self.pos..self.tokens.items.len) |pos| {
@@ -109,7 +109,7 @@ fn expect(self: *Parser, kind: Token.Tag) Error!void {
     // );
 
     const m = try self.open();
-    _ = try self.close(m, .{ .err = .unexpected });
+    _ = try self.close(m, .err);
 }
 
 fn expect_one_of(self: *Parser, kinds: []const Token.Tag) Error!void {
@@ -117,7 +117,7 @@ fn expect_one_of(self: *Parser, kinds: []const Token.Tag) Error!void {
         try self.advance();
     } else {
         const m = try self.open();
-        _ = try self.close(m, .{ .err = .unexpected });
+        _ = try self.close(m, .err);
     }
 }
 
@@ -127,9 +127,9 @@ fn advance_with_error(self: *Parser, err: []const u8) Error!void {
     _ = err;
     // self.diags.err(self.source_idx, self.nth_span(0), "{s}", .{err});
 
-    self.advance();
+    try self.advance();
 
-    _ = try self.close(m, .{ .err = .skipped });
+    _ = try self.close(m, .err);
 }
 
 fn advance_until(self: *Parser, kinds: []const Token.Tag) Error!void {
@@ -141,13 +141,11 @@ fn advance_until(self: *Parser, kinds: []const Token.Tag) Error!void {
 fn advance_with_error_until(self: *Parser, err: []const u8, kinds: []const Token.Tag) Error!void {
     const m = try self.open();
 
-    const err_kind: Tree.Tag.Err = if (self.at_any(kinds)) .missing else .skipped;
-
     _ = err;
     // self.diags.err(self.source_idx, self.nth_span(0), "{s}", .{err});
     try self.advance_until(kinds);
 
-    _ = try self.close(m, .{ .err = err_kind });
+    _ = try self.close(m, .err);
 }
 
 fn build_tree(self: *Parser) Error!Tree {
@@ -174,16 +172,9 @@ fn build_tree(self: *Parser) Error!Tree {
         }
     }
 
-    var tree = stack.pop() orelse unreachable;
+    std.debug.assert(tokens.next() == null);
 
-    // append dangling trivia
-    while (tokens.next()) |tok| {
-        if (tok.tag == .eof) break;
-        // if (!tok.tag.is_trivia()) continue;
-        try tree.children.append(self.arena, .{ .token = tok });
-    }
-
-    return tree;
+    return stack.pop() orelse unreachable;
 }
 
 const TokenIter = struct {
@@ -200,8 +191,10 @@ const TokenIter = struct {
 const EXPR_RESUME = [_]Token.Tag{ .number, .plus, .minus, .star, .slash, .left_paren };
 const EXPR_BOUNDARY = [_]Token.Tag{ .semicolon, .right_paren, .right_brace, .comma } ++ STMT_RECOVERY ++ DECL_RECOVERY;
 
-const STMT_RECOVERY = [_]Token.Tag{.@"return"};
-const DECL_RECOVERY = [_]Token.Tag{.fun};
+const STMT_RECOVERY = [_]Token.Tag{ .@"return", .print };
+const DECL_RECOVERY = [_]Token.Tag{.@"var"};
+
+const STMT_TAGS = [_]Token.Tag{ .left_brace, .print, .@"var" };
 
 const Precedence = enum {
     assignment, // =
@@ -235,7 +228,7 @@ fn literal_expr(self: *Parser) Error!MarkClosed {
 
     try self.expect_one_of(&.{ .number, .string, .true, .false, .nil });
 
-    return try self.close(m, .{ .expr = .literal });
+    return try self.close(m, .literal_expr);
 }
 
 fn var_expr(self: *Parser) Error!MarkClosed {
@@ -243,7 +236,7 @@ fn var_expr(self: *Parser) Error!MarkClosed {
 
     try self.expect(.identifier);
 
-    return try self.close(m, .{ .expr = .@"var" });
+    return try self.close(m, .var_expr);
 }
 
 fn unary_expr(self: *Parser) Error!MarkClosed {
@@ -252,7 +245,7 @@ fn unary_expr(self: *Parser) Error!MarkClosed {
     try self.advance();
     try self.parse_expr_prec(.unary);
 
-    return try self.close(m, .{ .expr = .unary });
+    return try self.close(m, .unary_expr);
 }
 
 fn binary_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
@@ -262,7 +255,7 @@ fn binary_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
     try self.advance();
     try self.parse_expr_prec(rules.get(op).prec.next());
 
-    return try self.close(m, .{ .expr = .binary });
+    return try self.close(m, .binary_expr);
 }
 
 fn assign_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
@@ -272,7 +265,7 @@ fn assign_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
     try self.advance();
     try self.parse_expr_prec(rules.get(op).prec);
 
-    return try self.close(m, .{ .expr = .assign });
+    return try self.close(m, .assign_expr);
 }
 
 fn grouping_expr(self: *Parser) Error!MarkClosed {
@@ -282,7 +275,7 @@ fn grouping_expr(self: *Parser) Error!MarkClosed {
     try self.expr();
     try self.expect(.right_paren);
 
-    return try self.close(m, .{ .expr = .group });
+    return try self.close(m, .group_expr);
 }
 
 const rules: std.enums.EnumArray(Token.Tag, PrecedenceRule) = .initDefault(.{}, .{
@@ -312,12 +305,11 @@ fn prefix_err_expr(self: *Parser) Error!MarkClosed {
 
     // self.diags.err(self.source_idx, self.nth_span(0), "can't parse prefix expression", .{});
 
-    const err_kind: Tree.Tag.Err = if (!self.at_any(&EXPR_BOUNDARY)) blk: {
+    if (!self.at_any(&EXPR_BOUNDARY)) {
         try self.advance_until(&(EXPR_RESUME ++ EXPR_BOUNDARY));
-        break :blk .unexpected;
-    } else .missing;
+    }
 
-    return try self.close(m, .{ .err = err_kind });
+    return try self.close(m, .err);
 }
 
 fn infix_err_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
@@ -325,25 +317,27 @@ fn infix_err_expr(self: *Parser, lhs: MarkClosed) Error!MarkClosed {
 
     try self.advance_with_error_until("can't parse infix expression", &(EXPR_RESUME ++ EXPR_BOUNDARY));
 
-    return if (self.at_any(&.{ .number, .minus, .left_paren })) blk: {
+    if (self.at_any(&.{ .number, .minus, .left_paren })) {
         try self.parse_expr_prec(rules.get(self.nth_tag(0)).prec.next());
-        break :blk self.close(m, .{ .expr = .binary });
-    } else self.close(m, .{ .err = .missing });
+        return self.close(m, .binary_expr);
+    } else {
+        return self.close(m, .err);
+    }
 }
 
 fn parse_expr_prec(self: *Parser, prec: Precedence) Error!void {
-    const prefix_cb = rules.get(self.nth_tag(0)).prefix orelse prefix_err_expr;
+    const prefix_fn = rules.get(self.nth_tag(0)).prefix orelse prefix_err_expr;
 
-    var lhs = try prefix_cb(self);
+    var lhs = try prefix_fn(self);
 
     while (!self.eof() and !self.at_any(&EXPR_BOUNDARY)) {
         const next_rule = rules.get(self.nth_tag(0));
 
         if (!prec.le(next_rule.prec)) break;
 
-        const infix_cb = next_rule.infix orelse infix_err_expr;
+        const infix_fn = next_rule.infix orelse infix_err_expr;
 
-        lhs = try infix_cb(self, lhs);
+        lhs = try infix_fn(self, lhs);
     }
 }
 
@@ -358,7 +352,7 @@ fn print_stmt(self: *Parser) Error!void {
     try self.expr();
     try self.expect(.semicolon);
 
-    _ = try self.close(m, .{ .stmt = .print });
+    _ = try self.close(m, .print_stmt);
 }
 
 fn block_stmt(self: *Parser) Error!void {
@@ -372,7 +366,7 @@ fn block_stmt(self: *Parser) Error!void {
 
     try self.expect(.right_brace);
 
-    _ = try self.close(m, .{ .stmt = .block });
+    _ = try self.close(m, .block_stmt);
 }
 
 fn expr_stmt(self: *Parser) Error!void {
@@ -381,7 +375,7 @@ fn expr_stmt(self: *Parser) Error!void {
     try self.expr();
     try self.expect(.semicolon);
 
-    _ = try self.close(m, .{ .stmt = .expr });
+    _ = try self.close(m, .expr_stmt);
 }
 
 fn stmt(self: *Parser) Error!void {
@@ -404,45 +398,73 @@ fn var_decl(self: *Parser) Error!void {
 
     try self.expect(.semicolon);
 
-    _ = try self.close(m, .{ .decl = .@"var" });
-}
-
-fn stmt_decl(self: *Parser) Error!void {
-    const m = try self.open();
-
-    try self.stmt();
-
-    _ = try self.close(m, .{ .decl = .stmt });
+    _ = try self.close(m, .var_decl);
 }
 
 fn decl(self: *Parser) Error!void {
     switch (self.nth_tag(0)) {
         .@"var" => try self.var_decl(),
-        else => try self.stmt_decl(),
+        else => try self.stmt(),
     }
 }
 
 fn program(self: *Parser) Error!void {
     const m = try self.open();
 
-    while (!self.eof()) {
+    while (!self.eof())
         try self.decl();
-    }
+
+    try self.expect(.eof);
 
     _ = try self.close(m, .program);
 }
 
-pub fn parse(mode: Mode, tokens: std.ArrayList(Token), allocator: Allocator) Error!HeapValue(Tree) {
+fn repl_cmd(self: *Parser) Error!void {
+    const m = try self.open();
+
+    try self.expect(.colon);
+
+    try self.expect(.identifier);
+
+    _ = try self.close(m, .repl_cmd);
+}
+
+fn repl_item(self: *Parser) Error!void {
+    const m = try self.open();
+
+    const tag = self.nth_tag(0);
+    if (tag.is_one_of(&STMT_TAGS)) {
+        try self.decl();
+    } else if (tag == .colon) {
+        try self.repl_cmd();
+    } else {
+        try self.expr();
+    }
+
+    try self.expect(.eof);
+
+    _ = try self.close(m, .repl_item);
+}
+
+pub fn parse_program(tokens: std.ArrayList(Token), allocator: Allocator) Error!HeapValue(Tree) {
     var cst: HeapValue(Tree) = .create(allocator);
     errdefer cst.free();
 
     var self: Parser = .{ .tokens = tokens, .arena = cst.arena.allocator() };
 
-    switch (mode) {
-        .expr => try self.expr(),
-        .program => try self.program(),
-    }
+    try self.program();
+    cst.value = try self.build_tree();
 
+    return cst;
+}
+
+pub fn parse_repl_item(tokens: std.ArrayList(Token), allocator: Allocator) Error!HeapValue(Tree) {
+    var cst: HeapValue(Tree) = .create(allocator);
+    errdefer cst.free();
+
+    var self: Parser = .{ .tokens = tokens, .arena = cst.arena.allocator() };
+
+    try self.repl_item();
     cst.value = try self.build_tree();
 
     return cst;

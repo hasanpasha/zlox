@@ -152,17 +152,15 @@ fn group_expr(self: *ASTLower, tree: Tree) Error!?Expr {
     return exp;
 }
 
-pub fn expr(self: *ASTLower, tree: Tree) Error!?Expr {
+fn expr(self: *ASTLower, tree: Tree) Error!?Expr {
     return switch (tree.tag) {
+        .literal_expr => try self.literal_expr(tree),
+        .var_expr => try self.var_expr(tree),
+        .unary_expr => try self.unary_expr(tree),
+        .binary_expr => try self.binary_expr(tree),
+        .assign_expr => try self.assign_expr(tree),
+        .group_expr => try self.group_expr(tree),
         .err => return null,
-        .expr => |exp| switch (exp) {
-            .literal => try self.literal_expr(tree),
-            .@"var" => try self.var_expr(tree),
-            .unary => try self.unary_expr(tree),
-            .binary => try self.binary_expr(tree),
-            .assign => try self.assign_expr(tree),
-            .group => try self.group_expr(tree),
-        },
         else => unreachable,
     };
 }
@@ -200,11 +198,11 @@ fn block_stmt(self: *ASTLower, tree: Tree) Error!?Stmt {
 
     if (!iter.match_token(.left_brace)) return Error.deformed_cst;
 
-    var block: std.ArrayList(Decl) = .empty;
+    var block: std.ArrayList(Stmt) = .empty;
 
-    while (iter.next_tree()) |decl_tree| {
-        if (try self.decl(decl_tree)) |inner_decl| {
-            try block.append(self.arena, inner_decl);
+    while (iter.next_tree()) |stmt_tree| {
+        if (try self.stmt(stmt_tree)) |inner_stmt| {
+            try block.append(self.arena, inner_stmt);
         }
     }
 
@@ -215,19 +213,7 @@ fn block_stmt(self: *ASTLower, tree: Tree) Error!?Stmt {
     return .{ .block = block };
 }
 
-fn stmt(self: *ASTLower, tree: Tree) Error!?Stmt {
-    return switch (tree.tag) {
-        .err => return null,
-        .stmt => |_stmt| switch (_stmt) {
-            .expr => self.expr_stmt(tree),
-            .block => self.block_stmt(tree),
-            .print => self.print_stmt(tree),
-        },
-        else => unreachable,
-    };
-}
-
-fn var_decl(self: *ASTLower, tree: Tree) Error!?Decl {
+fn var_decl(self: *ASTLower, tree: Tree) Error!?Stmt {
     var iter = tree.iter(ITER_CONF);
 
     if (!iter.match_token(.@"var")) return Error.deformed_cst;
@@ -244,54 +230,112 @@ fn var_decl(self: *ASTLower, tree: Tree) Error!?Decl {
 
     if (iter.peek()) |_| return Error.deformed_cst;
 
-    return .{ .@"var" = .{ .name = name, .initializer = initializer } };
+    return .{ .var_decl = .{ .name = name, .initializer = initializer } };
 }
 
-fn stmt_decl(self: *ASTLower, tree: Tree) Error!?Decl {
-    var iter = tree.iter(ITER_CONF);
-
-    const stmt_tree = iter.next_tree() orelse return Error.deformed_cst;
-    const _stmt = try self.stmt(stmt_tree) orelse return null;
-
-    if (iter.peek()) |_| return Error.deformed_cst;
-
-    return .{ .stmt = _stmt };
-}
-
-fn decl(self: *ASTLower, tree: Tree) Error!?Decl {
+fn stmt(self: *ASTLower, tree: Tree) Error!?Stmt {
     return switch (tree.tag) {
         .err => return null,
-        .decl => |_decl| switch (_decl) {
-            .@"var" => self.var_decl(tree),
-            .stmt => self.stmt_decl(tree),
-        },
-        else => |tag| panic("unexpected Tree tag '{t}'", .{tag}),
+        .expr_stmt => self.expr_stmt(tree),
+        .block_stmt => self.block_stmt(tree),
+        .print_stmt => self.print_stmt(tree),
+        .var_decl => self.var_decl(tree),
+        else => unreachable,
     };
 }
 
 fn program(self: *ASTLower, tree: Tree) Error!Program {
+    assert(tree.tag == .program);
+
     var iter = tree.iter(ITER_CONF);
 
-    var prg: Program = .{ .decls = .empty };
+    var prg: Program = .{ .stmts = .empty };
 
-    while (iter.next_tree()) |decl_tree| {
-        if (try self.decl(decl_tree)) |_decl| {
-            try prg.decls.append(self.arena, _decl);
+    while (iter.next_tree()) |stmt_tree| {
+        if (try self.stmt(stmt_tree)) |_stmt| {
+            try prg.stmts.append(self.arena, _stmt);
         }
     }
+
+    if (!iter.match_token(.eof)) return Error.deformed_cst;
+
+    if (iter.peek()) |_| return Error.deformed_cst;
 
     return prg;
 }
 
-pub fn lower(mode: Mode, tree: Tree, allocator: std.mem.Allocator) Error!?HeapValue(Node) {
-    var ast: HeapValue(Node) = .create(allocator);
+const repl_cmds: std.StaticStringMap(ReplItem.Cmd) = .initComptime(&.{
+    .{ "quit", .quit },
+});
+
+fn repl_cmd(_: *ASTLower, tree: Tree) Error!?ReplItem {
+    assert(tree.tag == .repl_cmd);
+
+    var iter = tree.iter(ITER_CONF);
+
+    if (!iter.match_token(.colon)) return Error.deformed_cst;
+
+    const cmd_token = iter.next_token() orelse return null;
+
+    const cmd = repl_cmds.get(cmd_token.lexeme()) orelse return null;
+
+    if (iter.peek()) |_| return Error.deformed_cst;
+
+    return .{ .cmd = cmd };
+}
+
+fn repl_item(self: *ASTLower, tree: Tree) Error!?ReplItem {
+    assert(tree.tag == .repl_item);
+
+    var iter = tree.iter(ITER_CONF);
+
+    const item_tree = iter.next_tree() orelse return null;
+
+    const item: ReplItem = switch (item_tree.tag) {
+        .repl_cmd => (try self.repl_cmd(item_tree)) orelse return null,
+        .literal_expr,
+        .var_expr,
+        .unary_expr,
+        .binary_expr,
+        .assign_expr,
+        .group_expr,
+        => .{ .expr = (try self.expr(item_tree)) orelse return null },
+        .expr_stmt,
+        .print_stmt,
+        .block_stmt,
+        .var_decl,
+        => .{ .stmt = (try self.stmt(item_tree)) orelse return null },
+        .err => return null,
+        .program, .repl_item => unreachable,
+    };
+
+    if (!iter.match_token(.eof)) return Error.deformed_cst;
+
+    if (iter.peek()) |_| return Error.deformed_cst;
+
+    return item;
+}
+
+pub fn lower_program(tree: Tree, allocator: std.mem.Allocator) Error!HeapValue(Program) {
+    var ast: HeapValue(Program) = .create(allocator);
     errdefer ast.free();
 
     var self: ASTLower = .{ .arena = ast.arena.allocator() };
 
-    ast.value = switch (mode) {
-        .expr => if (try self.expr(tree)) |_expr| .{ .expr = _expr } else return null,
-        .program => .{ .program = try self.program(tree) },
+    ast.value = try self.program(tree);
+
+    return ast;
+}
+
+pub fn lower_repl_item(tree: Tree, allocator: std.mem.Allocator) Error!?HeapValue(ReplItem) {
+    var ast: HeapValue(ReplItem) = .create(allocator);
+    errdefer ast.free();
+
+    var self: ASTLower = .{ .arena = ast.arena.allocator() };
+
+    ast.value = try self.repl_item(tree) orelse {
+        ast.free();
+        return null;
     };
 
     return ast;
@@ -300,15 +344,14 @@ pub fn lower(mode: Mode, tree: Tree, allocator: std.mem.Allocator) Error!?HeapVa
 const ASTLower = @This();
 
 const std = @import("std");
+const assert = std.debug.assert;
 const panic = std.debug.panic;
 
 const Token = @import("Token.zig");
-const Mode = @import("ZLOX.zig").Mode;
 
 const AST = @import("AST.zig");
-const Node = AST.Node;
 const Program = AST.Program;
-const Decl = AST.Decl;
+const ReplItem = AST.ReplItem;
 const Stmt = AST.Stmt;
 const Expr = AST.Expr;
 

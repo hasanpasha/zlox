@@ -122,6 +122,7 @@ pub fn next_token(self: *Lexer) ?Token {
         '{' => .left_brace,
         '}' => .right_brace,
         ',' => .comma,
+        ':' => .colon,
         ';' => .semicolon,
         '.' => .dot,
         '+' => .plus,

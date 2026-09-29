@@ -74,8 +74,14 @@ pub const Expr = union(enum) {
 
 pub const Stmt = union(enum) {
     expr: Expr,
-    block: std.ArrayList(Decl),
     print: Expr,
+    block: std.ArrayList(Stmt),
+    var_decl: VarDecl,
+
+    pub const VarDecl = struct {
+        name: []const u8,
+        initializer: ?Expr,
+    };
 
     pub fn format(self: Stmt, writer: *Writer) Writer.Error!void {
         try writer.print("{t}(", .{self});
@@ -89,46 +95,42 @@ pub const Stmt = union(enum) {
                 }
                 try writer.writeByte(']');
             },
-        }
-        try writer.writeByte(')');
-    }
-};
-
-pub const Decl = union(enum) {
-    @"var": Var,
-    stmt: Stmt,
-
-    pub const Var = struct {
-        name: []const u8,
-        initializer: ?Expr,
-    };
-
-    pub fn format(self: Decl, writer: *Writer) Writer.Error!void {
-        try writer.print("{t}(", .{self});
-        switch (self) {
-            .@"var" => |_var| try writer.print("\"{s}\", {?f}", .{ _var.name, _var.initializer }),
-            .stmt => |_stmt| try writer.print("{f}", .{_stmt}),
+            .var_decl => |_var| try writer.print("\"{s}\", {?f}", .{ _var.name, _var.initializer }),
         }
         try writer.writeByte(')');
     }
 };
 
 pub const Program = struct {
-    decls: std.ArrayList(Decl),
+    stmts: std.ArrayList(Stmt),
 
     pub fn format(self: Program, writer: *Writer) Writer.Error!void {
-        try writer.writeByte("[");
-        for (0.., self.decls.items) |i, decl| {
+        try writer.writeByte('[');
+        for (0.., self.stmts.items) |i, _stmt| {
             if (i > 0) try writer.writeAll(", ");
-            try writer.print("{f}", .{decl});
+            try writer.print("{f}", .{_stmt});
         }
         try writer.writeByte(']');
     }
 };
 
-pub const Node = union(Mode) {
+pub const ReplItem = union(enum) {
     expr: Expr,
-    program: Program,
+    stmt: Stmt,
+    cmd: Cmd,
+
+    pub const Cmd = enum {
+        quit,
+    };
+
+    pub fn format(self: ReplItem, writer: *Writer) Writer.Error!void {
+        try writer.print("{t}(", .{self});
+        switch (self) {
+            .cmd => |cmd| try writer.print("{t}", .{cmd}),
+            inline else => |item| try writer.print("{f}", .{item}),
+        }
+        try writer.writeByte(')');
+    }
 };
 
 const std = @import("std");
