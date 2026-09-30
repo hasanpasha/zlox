@@ -133,10 +133,25 @@ pub const Tree = struct {
         }
     };
 
-    pub fn format(self: Tree, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        var buffer: [1024]bool = undefined;
-        var pretty: TreePrettyPrinter = .{ .are_last = .initBuffer(&buffer), .writer = writer };
-        try pretty.pp_tree(self);
+    pub const FatTree = struct {
+        tree: Tree,
+        source: Source,
+        source_manager: *const SourceManager,
+
+        pub fn format(self: @This(), writer: *Writer) Writer.Error!void {
+            var buffer: [1024]bool = undefined;
+            var pretty: TreePrettyPrinter = .{
+                .are_last = .initBuffer(&buffer),
+                .writer = writer,
+                .source = self.source,
+                .source_manager = self.source_manager,
+            };
+            try pretty.pp_tree(self.tree);
+        }
+    };
+
+    pub fn pp(self: Tree, source: Source, source_manager: *const SourceManager) FatTree {
+        return .{ .tree = self, .source = source, .source_manager = source_manager };
     }
 
     pub fn iter(self: Tree, ignores: []const Iter.Ignore) Iter {
@@ -147,8 +162,8 @@ pub const Tree = struct {
 pub const TreePrettyPrinter = struct {
     are_last: std.ArrayList(bool),
     writer: *Writer,
-
-    const Writer = std.Io.Writer;
+    source: Source,
+    source_manager: *const SourceManager,
 
     fn pp_tree(self: *TreePrettyPrinter, tree: Tree) Writer.Error!void {
         try self.writer.print("{t}\n", .{tree.tag});
@@ -179,7 +194,7 @@ pub const TreePrettyPrinter = struct {
                 try self.writer.print("{t} ", .{token.tag});
 
                 if (token.tag.is_one_of(&.{ .number, .string, .identifier }))
-                    try self.writer.print("'{s}'", .{token.lexeme()});
+                    try self.writer.print("'{s}'", .{self.source_manager.get_lexeme(self.source, token.span)});
 
                 try self.writer.writeByte('\n');
             },
@@ -190,5 +205,9 @@ pub const TreePrettyPrinter = struct {
 };
 
 const std = @import("std");
+const Writer = std.Io.Writer;
 
 const Token = @import("Token.zig");
+
+const SourceManager = @import("SourceManager.zig");
+const Source = SourceManager.Source;

@@ -4,6 +4,8 @@ pos: usize = 0,
 fuel: u32 = 256,
 events: std.ArrayList(Event) = .empty,
 
+diags: *Diagnostics,
+
 arena: std.mem.Allocator,
 
 pub const Event = union(enum) {
@@ -102,7 +104,7 @@ fn expect(self: *Parser, kind: Token.Tag) Error!void {
     // const cur_token = self.nth_token(0);
 
     // self.diags.err(
-    //     self.source_idx,
+    //     self.source,
     //     cur_token.span,
     //     "unexpected token: expected `{t}`, found `{t}`",
     //     .{ kind, cur_token.Tag },
@@ -446,11 +448,15 @@ fn repl_item(self: *Parser) Error!void {
     _ = try self.close(m, .repl_item);
 }
 
-pub fn parse_program(tokens: std.ArrayList(Token), allocator: Allocator) Error!HeapValue(Tree) {
+pub fn parse_program(tokens: std.ArrayList(Token), allocator: Allocator, diags: *Diagnostics) Error!HeapValue(Tree) {
     var cst: HeapValue(Tree) = .create(allocator);
     errdefer cst.free();
 
-    var self: Parser = .{ .tokens = tokens, .arena = cst.arena.allocator() };
+    var self: Parser = .{
+        .tokens = tokens,
+        .arena = cst.arena.allocator(),
+        .diags = diags,
+    };
 
     try self.program();
     cst.value = try self.build_tree();
@@ -458,11 +464,15 @@ pub fn parse_program(tokens: std.ArrayList(Token), allocator: Allocator) Error!H
     return cst;
 }
 
-pub fn parse_repl_item(tokens: std.ArrayList(Token), allocator: Allocator) Error!HeapValue(Tree) {
+pub fn parse_repl_item(tokens: std.ArrayList(Token), allocator: Allocator, diags: *Diagnostics) Error!HeapValue(Tree) {
     var cst: HeapValue(Tree) = .create(allocator);
     errdefer cst.free();
 
-    var self: Parser = .{ .tokens = tokens, .arena = cst.arena.allocator() };
+    var self: Parser = .{
+        .tokens = tokens,
+        .arena = cst.arena.allocator(),
+        .diags = diags,
+    };
 
     try self.repl_item();
     cst.value = try self.build_tree();
@@ -476,16 +486,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.parser);
 
-const Mode = @import("ZLOX.zig").Mode;
-
 const Token = @import("Token.zig");
 const Lexer = @import("Lexer.zig");
 
 const CST = @import("CST.zig");
 const Tree = CST.Tree;
 
-const Source = @import("source_manager.zig").Source;
+const Source = @import("SourceManager.zig").Source;
 
 const HeapValue = @import("heap_value.zig").HeapValue;
 
-// const Diagnostics = @import("Diagnostics.zig");
+const Diagnostics = @import("Diagnostics.zig");

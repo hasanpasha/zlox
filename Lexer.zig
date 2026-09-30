@@ -1,23 +1,22 @@
-source: Source,
+code: []const u8,
 start_pos: usize = 0,
 cur_pos: usize = 0,
 
 fn is_at_end(self: Lexer) bool {
-    return self.cur_pos >= self.source.getSourceCode().len;
+    return self.cur_pos >= self.code.len;
 }
 
 fn cur_char(self: Lexer) u8 {
-    return self.source.getSourceCode()[self.cur_pos];
+    return self.code[self.cur_pos];
 }
 
 fn peek_char(self: Lexer) ?u8 {
-    const code = self.source.getSourceCode();
-    if (self.cur_pos + 1 >= code.len) return null;
-    return code[self.cur_pos + 1];
+    if (self.cur_pos + 1 >= self.code.len) return null;
+    return self.code[self.cur_pos + 1];
 }
 
 fn cur_lexeme(self: Lexer) []const u8 {
-    return self.source.getSourceCode()[self.start_pos..self.cur_pos];
+    return self.code[self.start_pos..self.cur_pos];
 }
 
 fn cur_span(self: Lexer) Span {
@@ -38,11 +37,7 @@ fn match(self: *Lexer, c: u8) bool {
 }
 
 fn tok(self: *const Lexer, tag: Tag) Token {
-    return .{
-        .tag = tag,
-        .source = self.source,
-        .span = self.cur_span(),
-    };
+    return .{ .tag = tag, .span = self.cur_span() };
 }
 
 fn advance_while(self: *Lexer, pred: fn (u8) bool) void {
@@ -151,11 +146,11 @@ pub fn next_token(self: *Lexer) ?Token {
     return self.tok(tag);
 }
 
-pub fn lex(source: Source, gpa: Allocator) Allocator.Error!std.ArrayList(Token) {
+pub fn lex(code: []const u8, gpa: Allocator) Allocator.Error!std.ArrayList(Token) {
     var tokens: std.ArrayList(Token) = .empty;
     errdefer tokens.deinit(gpa);
 
-    var lexer: Lexer = .{ .source = source };
+    var lexer: Lexer = .{ .code = code };
     while (lexer.next_token()) |t| {
         try tokens.append(gpa, t);
     }
@@ -172,6 +167,3 @@ const Allocator = std.mem.Allocator;
 const Token = @import("Token.zig");
 const Tag = Token.Tag;
 const Span = Token.Span;
-
-const source_manager = @import("source_manager.zig");
-const Source = source_manager.Source;
