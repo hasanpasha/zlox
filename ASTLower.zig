@@ -1,5 +1,3 @@
-source: Source,
-source_manager: *const SourceManager,
 arena: std.mem.Allocator,
 
 pub const Error = error{
@@ -19,18 +17,18 @@ fn alloc_expr(self: *ASTLower, exp: Expr) Error!*Expr {
     return mem;
 }
 
-fn literal_expr(self: *ASTLower, tree: Tree) Error!?Expr {
+fn literal_expr(_: *ASTLower, tree: Tree) Error!?Expr {
     var iter = tree.iter(ITER_CONF);
 
     const literal_tok = iter.next_token() orelse return Error.deformed_cst;
     const literal_exp: Expr.Literal = switch (literal_tok.tag) {
         .number => blk: {
-            const lexeme = self.source_manager.get_lexeme(self.source, literal_tok.span);
+            const lexeme = literal_tok.lexeme();
             const number = std.fmt.parseFloat(f64, lexeme) catch return Error.invalid_number;
             break :blk .{ .number = number };
         },
         .string => blk: {
-            const lexeme = self.source_manager.get_lexeme(self.source, literal_tok.span);
+            const lexeme = literal_tok.lexeme();
             break :blk .{ .string = lexeme[1 .. lexeme.len - 1] };
         },
         .true => .{ .boolean = true },
@@ -44,11 +42,11 @@ fn literal_expr(self: *ASTLower, tree: Tree) Error!?Expr {
     return .{ .literal = literal_exp };
 }
 
-fn var_expr(self: *ASTLower, tree: Tree) Error!?Expr {
+fn var_expr(_: *ASTLower, tree: Tree) Error!?Expr {
     var iter = tree.iter(ITER_CONF);
 
     const ident_tok = iter.next_token_if(&.{.identifier}) orelse return Error.deformed_cst;
-    const name = self.source_manager.get_lexeme(self.source, ident_tok.span);
+    const name = ident_tok.lexeme();
 
     if (iter.peek()) |_| return Error.deformed_cst;
 
@@ -221,8 +219,7 @@ fn var_decl(self: *ASTLower, tree: Tree) Error!?Stmt {
     if (!iter.match_token(.@"var")) return Error.deformed_cst;
 
     const ident_tok = iter.next_token_if(&.{.identifier}) orelse return Error.deformed_cst;
-    // const name = ident_tok.lexeme();
-    const name = self.source_manager.get_lexeme(self.source, ident_tok.span);
+    const name = ident_tok.lexeme();
 
     const initializer = if (iter.match_token(.equal)) blk: {
         const exp_tree = iter.next_tree() orelse return Error.deformed_cst;
@@ -271,7 +268,7 @@ const repl_cmds: std.StaticStringMap(ReplItem.Cmd) = .initComptime(&.{
     .{ "quit", .quit },
 });
 
-fn repl_cmd(self: *ASTLower, tree: Tree) Error!?ReplItem {
+fn repl_cmd(_: *ASTLower, tree: Tree) Error!?ReplItem {
     assert(tree.tag == .repl_cmd);
 
     var iter = tree.iter(ITER_CONF);
@@ -279,9 +276,8 @@ fn repl_cmd(self: *ASTLower, tree: Tree) Error!?ReplItem {
     if (!iter.match_token(.colon)) return Error.deformed_cst;
 
     const cmd_token = iter.next_token() orelse return null;
-    const cmd_lexeme = self.source_manager.get_lexeme(self.source, cmd_token.span);
 
-    const cmd = repl_cmds.get(cmd_lexeme) orelse return null;
+    const cmd = repl_cmds.get(cmd_token.lexeme()) orelse return null;
 
     if (iter.peek()) |_| return Error.deformed_cst;
 
@@ -320,30 +316,22 @@ fn repl_item(self: *ASTLower, tree: Tree) Error!?ReplItem {
     return item;
 }
 
-pub fn lower_program(tree: Tree, source: Source, source_manager: *const SourceManager, allocator: std.mem.Allocator) Error!HeapValue(Program) {
+pub fn lower_program(tree: Tree, allocator: std.mem.Allocator) Error!HeapValue(Program) {
     var ast: HeapValue(Program) = .create(allocator);
     errdefer ast.free();
 
-    var self: ASTLower = .{
-        .arena = ast.arena.allocator(),
-        .source = source,
-        .source_manager = source_manager,
-    };
+    var self: ASTLower = .{ .arena = ast.arena.allocator() };
 
     ast.value = try self.program(tree);
 
     return ast;
 }
 
-pub fn lower_repl_item(tree: Tree, source: Source, source_manager: *const SourceManager, allocator: std.mem.Allocator) Error!?HeapValue(ReplItem) {
+pub fn lower_repl_item(tree: Tree, allocator: std.mem.Allocator) Error!?HeapValue(ReplItem) {
     var ast: HeapValue(ReplItem) = .create(allocator);
     errdefer ast.free();
 
-    var self: ASTLower = .{
-        .arena = ast.arena.allocator(),
-        .source = source,
-        .source_manager = source_manager,
-    };
+    var self: ASTLower = .{ .arena = ast.arena.allocator() };
 
     ast.value = try self.repl_item(tree) orelse {
         ast.free();
@@ -370,8 +358,5 @@ const Expr = AST.Expr;
 const CST = @import("CST.zig");
 const Tree = CST.Tree;
 const Child = Tree.Child;
-
-const SourceManager = @import("SourceManager.zig");
-const Source = SourceManager.Source;
 
 const HeapValue = @import("heap_value.zig").HeapValue;

@@ -4,12 +4,9 @@ stdin: File.Reader,
 stdout: File.Writer,
 stderr: File.Writer,
 
-source_manager: SourceManager,
-diags: Diagnostics,
-
 interpreter: Interpreter,
 
-pub const Error = Allocator.Error || Io.Reader.Error || Io.Writer.Error || SourceManager.Error;
+pub const Error = Allocator.Error || Io.Reader.Error || Io.Writer.Error || Source.Error;
 
 var stdin_buffer: [1024]u8 = undefined;
 var stdout_buffer: [1024]u8 = undefined;
@@ -25,25 +22,25 @@ pub fn init(io: Io, gpa: Allocator) Error!*ZLOX {
         .stdin = File.stdin().reader(io, &stdin_buffer),
         .stdout = File.stdout().writer(io, &stdout_buffer),
         .stderr = File.stderr().writer(io, &stderr_buffer),
-        .source_manager = .init(io, gpa),
-        .diags = undefined,
         .interpreter = undefined,
     };
 
-    self.interpreter = try .init(&self.stdout.interface, self.gpa);
-    self.diags = .init(&self.source_manager, self.gpa);
+    try self.init_interpreter();
 
     return self;
 }
 
+fn init_interpreter(self: *ZLOX) Error!void {
+    self.interpreter = try .init(&self.stdout.interface, self.gpa);
+}
+
 pub fn deinit(self: *ZLOX) void {
     self.interpreter.deinit();
-    self.source_manager.deinit();
     self.gpa.destroy(self);
 }
 
 pub fn repl(self: *ZLOX) Error!void {
-    const repl_source: Source = try self.source_manager.new("repl");
+    const stdin_source: Source = try .new("stdin");
 
     const PS = ">>> ";
 
@@ -55,17 +52,16 @@ pub fn repl(self: *ZLOX) Error!void {
             if (err == error.StreamTooLong) continue;
             return @errorCast(err);
         } orelse break;
-        try self.source_manager.update_source_code_from_slice(repl_source, line);
 
-        var tokens = try Lexer.lex(self.source_manager.get_source_code(repl_source), self.gpa);
+        try stdin_source.updateSourceCodeFromSlice(line);
+
+        var tokens = try Lexer.lex(stdin_source, self.gpa);
         defer tokens.deinit(self.gpa);
 
-        var cst = try Parser.parse_repl_item(tokens, self.gpa, &self.diags);
+        var cst = try Parser.parse_repl_item(tokens, self.gpa);
         defer cst.free();
 
-        std.log.debug("{f}", .{cst.value.pp(repl_source, &self.source_manager)});
-
-        var ast = ASTLower.lower_repl_item(cst.value, repl_source, &self.source_manager, self.gpa) catch |err| {
+        var ast = ASTLower.lower_repl_item(cst.value, self.gpa) catch |err| {
             if (@TypeOf(err) == Error) return @errorCast(err);
             try self.stderr.interface.print("parser error: {t}\n", .{err});
             try self.stderr.interface.flush();
@@ -100,16 +96,16 @@ pub fn repl(self: *ZLOX) Error!void {
 }
 
 pub fn run_file(self: *ZLOX, filepath: []const u8) Error!void {
-    const source: Source = try self.source_manager.new(filepath);
-    try self.source_manager.updateSourceCodeFromFile(source);
+    const source: Source = try .new(filepath);
+    try source.updateSourceCodeFromFile();
 
-    var tokens = try Lexer.lex(self.source_manager.get_source_code(source), self.gpa);
+    var tokens = try Lexer.lex(source, self.gpa);
     defer tokens.deinit(self.gpa);
 
-    var cst = try Parser.parse_program(tokens, self.gpa, &self.diags);
+    var cst = try Parser.parse_program(tokens, self.gpa);
     defer cst.free();
 
-    var ast = ASTLower.lower_program(cst.value, source, &self.source_manager, self.gpa) catch |err| {
+    var ast = ASTLower.lower_program(cst.value, self.gpa) catch |err| {
         if (@TypeOf(err) == Error) return @errorCast(err);
         try self.stderr.interface.print("parser error: {t}\n", .{err});
         try self.stderr.interface.flush();
@@ -143,9 +139,6 @@ const AST = @import("AST.zig");
 const ASTLower = @import("ASTLower.zig");
 const Interpreter = @import("Interpreter.zig");
 
-const SourceManager = @import("SourceManager.zig");
-const Source = SourceManager.Source;
-
-const Diagnostics = @import("Diagnostics.zig");
+const Source = @import("source_manager.zig").Source;
 
 const HeapValue = @import("heap_value.zig").HeapValue;

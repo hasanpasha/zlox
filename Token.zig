@@ -1,4 +1,5 @@
 tag: Tag,
+source: Source,
 span: Span,
 
 pub const Tag = enum {
@@ -78,4 +79,21 @@ pub const Span = struct {
     end: usize,
 };
 
+pub fn lexeme(self: Token) []const u8 {
+    return self.source.getLexeme(self.span.start, self.span.end);
+}
+
+pub fn location(self: Token) source_manager.Location {
+    return self.source.getLocation(self.span.start);
+}
+
+pub fn format(self: Token, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    try writer.print("{t}('{s}')", .{ self.tag, self.lexeme() });
+}
+
 const Token = @This();
+
+const std = @import("std");
+
+const source_manager = @import("source_manager.zig");
+const Source = source_manager.Source;
